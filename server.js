@@ -1,26 +1,27 @@
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
-const cors = require('cors');
+const cors = require('cors'); // Ensuring CORS is available
 
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: '*',
+    origin: '*', // Allow all origins; change this if you want to limit CORS to a specific domain
     methods: ['GET', 'POST'],
   },
 });
 
-app.use(cors());
+app.use(cors()); // CORS middleware
 
 const games = {};
 const roles = ['Killer', 'Doctor', 'Detective', 'Lawyer', 'Policeman', 'Citizen', 'Citizen', 'Citizen', 'Citizen', 'Citizen'];
 
 function generateGameCode() {
-  const gameCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+  // Generate a random number between 100000 and 999999 (6 digits)
+  const gameCode = Math.floor(100000 + Math.random() * 900000);
   console.log(`Generated game code: ${gameCode}`);
-  return gameCode;
+  return gameCode.toString(); // Return the code as a string
 }
 
 function shuffleArray(array) {
@@ -58,6 +59,7 @@ socket.on('createGame', (hostName) => {
       detectiveId: null,
       policemanId: null,
       lawyerId: null,
+      numberOfVotes:0,
     };
     socket.join(gameCode);
     socket.emit('gameCreated', { gameCode, players: games[gameCode].players });
@@ -278,78 +280,89 @@ socket.on('createGame', (hostName) => {
         break;
     }
   });
-  socket.on('vote', ({ votedPlayer, gameCode }) => {
-    const game = games[gameCode];
-  
-    // Initialize votes if not already done
-    if (!game.votes) {
-      game.votes = {};
-    }
-  
-    // Increment the vote count for the voted player
-    if (!game.votes[votedPlayer]) {
-      game.votes[votedPlayer] = 1;
-    } else {
-      game.votes[votedPlayer]++;
-    }
-  
-    console.log(`${socket.id} voted for ${votedPlayer}`);
-    console.log("this man was muted")
-    console.log(game.mutedPlayer)
-    // Check if the number of votes is equal to the number of players
-    var muted=0;
-    if(game.mutedPlayer)
-      muted=1;
+socket.on('vote', ({ votedPlayer, gameCode }) => {
+  const game = games[gameCode];
 
-    if (Object.keys(game.votes).length === game.players.length-muted) {
+  // Initialize votes if not already done
+  if (!game.votes) {
+      game.votes = {};
+  }
+
+  // Determine if the player is muted
+  const isMutedPlayer = (game.mutedPlayer === socket.id);
+  if (isMutedPlayer) {
+      console.log(`${socket.id} is muted and cannot vote.`);
+      return; // Prevent further execution if the player is muted
+  }
+   game.numberOfVotes++;
+  // Increment the vote count for the voted player
+  if (!game.votes[votedPlayer]) {
+      game.votes[votedPlayer] = 1;
+  } else {
+      game.votes[votedPlayer]++;
+  }
+
+  console.log(`${socket.id} voted for ${votedPlayer}`);
+  console.log("This man was muted:", game.mutedPlayer);
+
+  // Track the number of unique players who have voted
+  const totalPlayers = game.players.length;
+  const uniqueVoters = new Set(Object.keys(game.votes)).size; // Number of unique players who voted
+
+  var muted = game.mutedPlayer ? 1 : 0; // Check for muted players
+
+  console.log("Total players:", totalPlayers);
+  console.log("Muted players:", muted);
+  console.log("count num votes cast:", game.numberOfVotes);
+
+  // Check if all players (excluding muted ones) have voted
+  if (game.numberOfVotes === (totalPlayers - muted)) {
+      game.numberOfVotes =0
       // Find the player with the most votes
+      console.log("Summing up votes...");
       const [votedOutPlayer, voteCount] = Object.entries(game.votes).reduce((a, b) => (b[1] > a[1] ? b : a)); 
-  
+
       // Remove the voted-out player from the players list
       game.players = game.players.filter(player => player.name !== votedOutPlayer);
-  
-      // Determine the role of the voted-out player
-      const votedOutRole = game.roles[votedOutPlayer];
-  
-      if (votedOutRole === 'Killer') {
-        // Notify all players that the Killer was voted out
-        io.to(gameCode).emit('playersWon');
-        console.log('Killer was voted out. Game over, citizens won!');
+
+      if (votedOutPlayer === game.killerId) {
+          // Notify all players that the Killer was voted out
+          io.to(gameCode).emit('playersWon');
+          console.log('Killer was voted out. Game over, citizens won!');
       } else {
-        // Notify each player of their specific role
-        game.players.forEach(player => {
-          let role = 'Citizen'; // Default to Citizen
+          // Notify each player of their specific role
+          game.players.forEach(player => {
+              let role = 'Citizen'; // Default to Citizen
+          
+              // Determine role based on player IDs
+              if (player.id === game.killerId) {
+                  role = 'Killer';
+              } else if (player.id === game.doctorId) {
+                  role = 'Doctor';
+              } else if (player.id === game.detectiveId) {
+                  role = 'Detective';
+              } else if (player.id === game.policemanId) {
+                  role = 'Policeman';
+              } else if (player.id === game.lawyerId) {
+                  role = 'Lawyer';
+              }
       
-          // Determine role based on player IDs
-          if (player.id === game.killerId) {
-            role = 'Killer';
-          } else if (player.id === game.doctorId) {
-            role = 'Doctor';
-          } else if (player.id === game.detectiveId) {
-            role = 'Detective';
-          } else if (player.id === game.policemanId) {
-            role = 'Policeman';
-          } else if (player.id === game.lawyerId) {
-            role = 'Lawyer';
-          }
-      
-          // Emit game resume with the specific role
-          io.to(player.id).emit('gameResume', {
-            players: game.players,
-            role:role, // Send the specific role to the player
-            gameCode:gameCode,
+              // Emit game resume with the specific role
+              io.to(player.id).emit('gameResume', {
+                  players: game.players,
+                  role: role, // Send the specific role to the player
+                  gameCode: gameCode,
+              });
+              console.log(`Sent role ${role} to player ${player.name}`);
           });
-          console.log(`Sent role ${role} to player ${player.name}`);
-        });
-        
-        console.log(`Player ${votedOutPlayer} was voted out. Game resumes.`);
+          
+          console.log(`Player ${votedOutPlayer} was voted out. Game resumes.`);
       }
-  
+
       // Reset the votes for the next round
       game.votes = {};
-    }
-  });
-
+  }
+});
   socket.on('disconnect', () => {
     console.log(`Client disconnected: ${socket.id}`);
     Object.keys(games).forEach(gameCode => {
@@ -360,6 +373,7 @@ socket.on('createGame', (hostName) => {
     });
   });
 });
-
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
