@@ -54,6 +54,7 @@ socket.on('createGame', (hostName) => {
       detectiveChoice: null,
       policemanChoice: null,
       mutedPlayer: null,
+      deadPlayer:null,
       killerId: null,
       doctorId: null,
       detectiveId: null,
@@ -172,10 +173,10 @@ socket.on('createGame', (hostName) => {
 
     switch (role) {
       case 'Killer':
-        console.log("this the man try id:");
-        console.log(socket.id);
-        console.log("this the start kiler  id:");
-        console.log(game.killerId);
+          console.log("this the man try id:");
+          console.log(socket.id);
+          console.log("this the start kiler  id:");
+          console.log(game.killerId);
           game.killerChoice = targetId;
           game.currentTurn = 'Doctor';
           io.to(game.doctorId).emit('doctorTurn');
@@ -235,6 +236,7 @@ socket.on('createGame', (hostName) => {
           if (killerTarget !== doctorTarget) {
             console.log('The killer kill :');
             console.log(killerTarget);
+            game.deadPlayer=killerTarget;
             const eliminatedPlayer = game.players.find(player => player.id === killerTarget);
             // Remove the player from the players array
             if (eliminatedPlayer) {
@@ -242,6 +244,7 @@ socket.on('createGame', (hostName) => {
               io.to(killerTarget).emit('die'); // Send "die" message to the eliminated player
             }
           } else {
+            game.deadPlayer=null;
             console.log('The Doctor saved the Killer\'s target!');
           }
           
@@ -310,7 +313,10 @@ socket.on('vote', ({ votedPlayer, gameCode }) => {
   const uniqueVoters = new Set(Object.keys(game.votes)).size; // Number of unique players who voted
 
   var muted = game.mutedPlayer ? 1 : 0; // Check for muted players
-
+  if (muted === 1 && game.deadPlayer !== null && game.mutedPlayer === game.deadPlayer) {
+    muted = 0;
+    console.log("Muted changed to 0 because game.mutedPlayer === game.deadPlayer");
+}
   console.log("Total players:", totalPlayers);
   console.log("Muted players:", muted);
   console.log("count num votes cast:", game.numberOfVotes);
@@ -323,13 +329,14 @@ socket.on('vote', ({ votedPlayer, gameCode }) => {
       const [votedOutPlayer, voteCount] = Object.entries(game.votes).reduce((a, b) => (b[1] > a[1] ? b : a)); 
 
       // Remove the voted-out player from the players list
-      game.players = game.players.filter(player => player.name !== votedOutPlayer);
+      game.players = game.players.filter(player => player.id !== votedOutPlayer);
 
       if (votedOutPlayer === game.killerId) {
           // Notify all players that the Killer was voted out
           io.to(gameCode).emit('playersWon');
           console.log('Killer was voted out. Game over, citizens won!');
       } else {
+        io.to(votedOutPlayer).emit('die'); // Send "die" message to the eliminated player
           // Notify each player of their specific role
           game.players.forEach(player => {
               let role = 'Citizen'; // Default to Citizen
